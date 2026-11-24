@@ -247,12 +247,13 @@ def claude(server, monkeypatch, stop_reason):
 def test_claude(server, monkeypatch):
     assert claude(server, monkeypatch, "end_turn") == "## Resumo"
     body = server.seen[1]
-    assert body["model"] == "claude-opus-5-5" and body["fallbacks"] == "default"
+    assert body["model"] == "claude-opus-5-5" and "fallbacks" not in body
 
 
-@pytest.mark.parametrize("reason", ["refusal", "max_tokens"])
-def test_claude_resposta_incompleta(server, monkeypatch, reason):
-    with pytest.raises(summary.SummaryError):
+@pytest.mark.parametrize("reason, text", [
+    ("refusal", "claude-opus-5-5 recusou.*Troque o modelo.*claude-sonnet-5-5"), ("max_tokens", "cortada")])
+def test_claude_resposta_incompleta(server, monkeypatch, reason, text):
+    with pytest.raises(summary.SummaryError, match=text):
         claude(server, monkeypatch, reason)
 
 

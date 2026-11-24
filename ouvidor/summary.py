@@ -42,12 +42,8 @@ def _claude(system, user, cfg) -> str:
         system=system,
         messages=[{"role": "user", "content": user}],
     )
-    if cfg.modelo_claude in ("claude-opus-5-5", "claude-opus-5", "claude-sonnet-5-5",
-                             "claude-fable-5-1", "claude-fable-5-2"):
-        # Se o modelo recusar, a API tenta de novo em outro na mesma chamada.
-        request.update(betas=["server-side-fallback-2026-07-01"], fallbacks="default")
     try:
-        with client.beta.messages.stream(**request) as stream:
+        with client.messages.stream(**request) as stream:
             message = stream.get_final_message()
     except anthropic.AuthenticationError as e:
         raise SummaryError("chave de API do Claude inválida") from e
@@ -60,7 +56,10 @@ def _claude(system, user, cfg) -> str:
     except anthropic.APIConnectionError as e:
         raise SummaryError("sem conexão com a API do Claude") from e
     if message.stop_reason == "refusal":
-        raise SummaryError("o modelo recusou a solicitação")
+        other = "claude-opus-5-5" if cfg.modelo_claude == "claude-sonnet-5-5" else "claude-sonnet-5-5"
+        raise SummaryError(
+            f"o modelo {cfg.modelo_claude} recusou o pedido. Troque o modelo em Configurações (⚙), "
+            f"por exemplo para {other}, e use ⋯ > Reprocessar pasta")
     if message.stop_reason == "max_tokens":
         raise SummaryError("a resposta foi cortada por tamanho")
     return "".join(b.text for b in message.content if b.type == "text")

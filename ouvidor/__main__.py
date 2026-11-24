@@ -48,6 +48,7 @@ def main() -> int:
     from ouvidor.ui.window import FloatingWindow
 
     app = QApplication(sys.argv)
+    app.setQuitOnLastWindowClosed(False)  # a janela some na bandeja; fechar encerra
     window = FloatingWindow()
     window.show()
     return app.exec()

@@ -9,12 +9,14 @@ from pathlib import Path
 from PySide6.QtCore import QPoint, QRectF, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton, QVBoxLayout, QWidget)
+    QApplication, QFileDialog, QFrame, QHBoxLayout, QLabel, QMenu, QMessageBox, QPushButton,
+    QSystemTrayIcon, QVBoxLayout, QWidget)
 
 from .. import config
 from ..audio import MIC, SYSTEM
 from ..session import Session, clock, reprocess
 from .settings import SettingsDialog
+from .tray import Tray
 
 log = logging.getLogger(__name__)
 
@@ -82,7 +84,9 @@ class FloatingWindow(QWidget):
         self.folder: Path | None = None
         self._drag: QPoint | None = None
         self._close_when_done = False
+        self._warned = ""
         self._build()
+        self.tray = Tray(self, self.stop, self.restore)
         self._status.connect(self._show_status)
         self._done.connect(self._finished)
         self._started.connect(self._on_started)
@@ -111,6 +115,8 @@ class FloatingWindow(QWidget):
         top.addStretch()
         top.addWidget(self.settings_button)
         top.addWidget(self.menu_button)
+        self.tray_button = self._icon("—", "Enviar para a bandeja", self.minimize)
+        top.addWidget(self.tray_button)
         top.addWidget(self._icon("✕", "Fechar", self.close))
         box.addLayout(top)
 
@@ -178,9 +184,30 @@ class FloatingWindow(QWidget):
         self.notice.show()
         self._notice_timer.start()
         self._timer.start()
+        self._warned = session.recorder.warning
         self._set_state("gravando")
+        self._go_to_tray()
         if self._close_when_done:  # pediram para fechar enquanto iniciava
             self.stop()
+
+    def _go_to_tray(self) -> None:
+        # Sem bandeja, ou com um diálogo aberto, esconder deixaria o usuário sem acesso.
+        if (self._close_when_done or not QSystemTrayIcon.isSystemTrayAvailable()
+                or QApplication.activeModalWidget()):
+            return
+        self.hide()
+        self.tray.notify("\n".join(filter(None, (self._warned, LGPD))), bool(self._warned))
+
+    def minimize(self) -> None:
+        if QSystemTrayIcon.isSystemTrayAvailable():
+            self.hide()
+        else:  # sem bandeja, vai para a barra de tarefas
+            self.showMinimized()
+
+    def restore(self) -> None:
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
 
     def stop(self) -> None:
         if self.state != "gravando":
@@ -218,6 +245,11 @@ class FloatingWindow(QWidget):
         closing, self._close_when_done = self._close_when_done, False
         if closing and not problems:
             self.close()
+        elif self.isHidden():
+            if problems:  # o texto completo do erro está na janela
+                self.restore()
+            else:
+                self.tray.notify("Pronto. Arquivos salvos.")
 
     def open_folder(self) -> None:
         folder = self.folder or self.cfg.output_dir
@@ -258,6 +290,7 @@ class FloatingWindow(QWidget):
         self.start_button.setEnabled(state == "parado")
         self.stop_button.setEnabled(state == "gravando")
         self.settings_button.setEnabled(state == "parado")
+        self.tray.set_state(state)
         self._show_status("")
 
     def _show_status(self, text) -> None:
@@ -271,6 +304,12 @@ class FloatingWindow(QWidget):
     def _tick(self) -> None:
         rec = self.session.recorder
         self.time.setText(clock(rec.elapsed))
+        self.tray.set_time(self.time.text())
+        problem = f"Erro na gravação: {rec.error}" if rec.error else rec.warning
+        if problem != self._warned:
+            self._warned = problem
+            if problem and self.isHidden():
+                self.tray.notify(problem, True)
         for kind, meter in self.meters.items():
             meter.set_rms(rec.levels[kind])
 
@@ -290,6 +329,8 @@ class FloatingWindow(QWidget):
     def closeEvent(self, event):
         if self.state == "parado":
             event.accept()
+            self.tray.hide()
+            QApplication.quit()
             return
         event.ignore()
         if self._close_when_done:
